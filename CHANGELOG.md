@@ -1,6 +1,8 @@
 # Change Log
 
-## [0.2.5] (next target)
+## [0.2.6] (next target)
+
+## [0.2.5] 2026-05-17
 
 API additions:
 
