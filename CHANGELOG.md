@@ -1,6 +1,8 @@
 # Change Log
 
-## [0.3.0] (in development) — portable backends; kpathsea_sys 0.2.0
+## [0.3.1] (in development)
+
+## [0.3.0] 2026-06-07 — portable backends; kpathsea_sys 0.2.0
 
 **The crate now works on Linux, macOS, and Windows, with or without
 `libkpathsea` present.** Every platform × backend configuration is
