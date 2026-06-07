@@ -1,0 +1,144 @@
+# Three platforms, both backends:
+#
+#  * Linux — apt libkpathsea-dev: the LINKED in-process backend (plus a
+#    forced-unlinked run so the subprocess backend stays covered on the
+#    platform where development happens). Also runs the drift canaries
+#    that guard the Windows backend: the format constants and the suffix
+#    table are checked against the linked C library.
+#  * macOS, subprocess — BasicTeX: TL-upstream binaries ship NO
+#    libkpathsea at all (no header, no dylib, no .pc) — the motivating
+#    scenario for the subprocess backend.
+#  * macOS, linked — Homebrew texlive: like Debian, Homebrew compiles TL
+#    from source with its own toolchain (--enable-shared), so a shared
+#    libkpathsea + kpathsea.pc exist and the pkg-config probe links them.
+#  * Windows, linked — TeX Live ships its kpathsea as a DLL next to
+#    kpsewhich.exe; kpathsea_sys's build script synthesizes an import
+#    library from the DLL's export table and links it (opaque-pointer
+#    bindings — see kpathsea_sys/src/bindings_windows.rs).
+#  * Windows, forced subprocess (KPATHSEA_NO_LINK) — exercises the
+#    subprocess backend's Windows path semantics (`;` path-list
+#    separator, drive-letter paths, .exe lookup through PATHEXT).
+#
+# Tests deliberately run with cargo's default parallelism — the old
+# Travis config needed RUST_TEST_THREADS=1 to dodge the concurrent
+# Kpaths::new() crash that is now fixed (and regression-tested).
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux (linked + forced-unlinked)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install TeX Live + libkpathsea
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libkpathsea-dev texlive-latex-base
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test (in-process backend, linked)
+        run: cargo test
+      - name: Test (subprocess backend, forced-unlinked)
+        run: cargo test
+        env:
+          KPATHSEA_NO_LINK: "1"
+          CARGO_TARGET_DIR: target-unlinked
+
+  macos:
+    name: macOS (BasicTeX, subprocess backend)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install BasicTeX (no libkpathsea by design)
+        run: |
+          brew install --cask basictex
+          echo "/Library/TeX/texbin" >> "$GITHUB_PATH"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (must fall back to the subprocess backend)
+        run: |
+          kpsewhich --version
+          cargo build 2>&1 | tee build.log
+          grep -q "building without linking" build.log
+      - name: Test
+        run: cargo test
+
+  macos-linked:
+    name: macOS (Homebrew texlive, linked in-process)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Homebrew TeX Live (shared libkpathsea + kpathsea.pc)
+        run: |
+          brew install pkgconf texlive
+          pkg-config --modversion kpathsea
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (must link libkpathsea)
+        run: |
+          cargo build 2>&1 | tee build.log
+          ! grep -q "building without linking" build.log
+      - name: Test
+        run: cargo test
+
+  windows-linked:
+    name: Windows (TL kpathsea DLL, linked in-process)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install TeX Live (scheme-basic)
+        uses: TeX-Live/setup-texlive-action@v4
+        with:
+          packages: scheme-basic
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (must link TeX Live's kpathsea DLL)
+        shell: bash
+        run: |
+          kpsewhich --version
+          cargo build 2>&1 | tee build.log
+          grep -q "linking TeX Live's" build.log
+      - name: Test
+        run: cargo test
+
+  windows-subprocess:
+    name: Windows (forced subprocess backend)
+    runs-on: windows-latest
+    env:
+      # The DLL is right there (TL installs it next to kpsewhich.exe), so
+      # the subprocess backend must be forced to stay under test.
+      KPATHSEA_NO_LINK: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install TeX Live (scheme-basic)
+        uses: TeX-Live/setup-texlive-action@v4
+        with:
+          packages: scheme-basic
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (must fall back to the subprocess backend)
+        shell: bash
+        run: |
+          kpsewhich --version
+          cargo build 2>&1 | tee build.log
+          grep -q "building without linking" build.log
+      - name: Test
+        run: cargo test
