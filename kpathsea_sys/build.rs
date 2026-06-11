@@ -1,4 +1,3 @@
-use pkg_config::find_library;
 use std::env;
 use std::path::PathBuf;
 
@@ -12,6 +11,16 @@ use std::path::PathBuf;
 ///  2. `KPATHSEA_LIB_DIR` env override — link against the given directory
 ///     unconditionally (for TeX trees that ship the library without a
 ///     `kpathsea.pc`, or cross-compilation setups).
+///
+/// `KPATHSEA_STATIC` (orthogonal to the probe order): when set, link the
+/// **static** archive (`libkpathsea.a`) instead of the shared library, baking
+/// it into the binary. This yields a self-contained executable that does
+/// in-process lookups with NO runtime `libkpathsea` dependency on the user's
+/// system — it launches even where the shared library is absent (MacTeX, or a
+/// machine with no TeX at all), degrading to empty lookups. The static archive
+/// must be present at build time (`libkpathsea-dev` ships `libkpathsea.a` on
+/// Debian/Ubuntu). The runtime backend is identical to a dynamic link — the
+/// host's TeX tree is still resolved via the `kpsewhich`-anchored program name.
 ///  3. `pkg-config kpathsea` — the standard Unix route (Debian/Ubuntu
 ///     `libkpathsea-dev`, Homebrew `texlive`, vanilla TL source installs).
 ///  4. Windows native builds: the kpathsea DLL TeX Live ships next to
@@ -23,6 +32,7 @@ use std::path::PathBuf;
 ///     and falls back to its subprocess-`kpsewhich` backend automatically.
 fn main() {
   println!("cargo:rerun-if-env-changed=KPATHSEA_NO_LINK");
+  println!("cargo:rerun-if-env-changed=KPATHSEA_STATIC");
   println!("cargo:rerun-if-env-changed=KPATHSEA_LIB_DIR");
   println!("cargo:rerun-if-env-changed=KPSEWHICH");
   println!("cargo:rustc-check-cfg=cfg(kpathsea_linked)");
@@ -37,15 +47,47 @@ fn main() {
     return;
   }
 
+  // Static vs. shared link mode. `static=` bakes `libkpathsea.a` into the
+  // binary (self-contained, no runtime libkpathsea dependency); the default
+  // links the shared library at load time.
+  let want_static = env::var_os("KPATHSEA_STATIC").is_some();
+  let link_kind = if want_static { "static=" } else { "" };
+
   if let Ok(dir) = env::var("KPATHSEA_LIB_DIR") {
     println!("cargo:rustc-link-search=native={dir}");
-    println!("cargo:rustc-link-lib=kpathsea");
+    println!("cargo:rustc-link-lib={link_kind}kpathsea");
     emit_linked();
     return;
   }
 
-  if find_library("kpathsea").is_ok() {
-    // pkg-config has already emitted the link-search/link-lib directives.
+  // pkg-config locates the library. For a dynamic link we let it emit the
+  // directives directly. For a STATIC link we suppress its emission and emit
+  // them ourselves: pkg-config deliberately refuses to statically link a
+  // library found in a default system path (a guard against statically linking
+  // system libraries), which would silently leave us DYNAMICALLY linked — so we
+  // force `static=kpathsea` from the probe's search paths.
+  if want_static {
+    if let Ok(lib) = pkg_config::Config::new()
+      .statik(true)
+      .cargo_metadata(false)
+      .probe("kpathsea")
+    {
+      for path in &lib.link_paths {
+        println!("cargo:rustc-link-search=native={}", path.display());
+      }
+      println!("cargo:rustc-link-lib=static=kpathsea");
+      // libkpathsea is self-contained (`pkg-config --static --libs kpathsea`
+      // lists only `-lkpathsea`); emit any future private deps AFTER it so the
+      // static archive's references resolve.
+      for l in &lib.libs {
+        if l != "kpathsea" {
+          println!("cargo:rustc-link-lib={l}");
+        }
+      }
+      emit_linked();
+      return;
+    }
+  } else if pkg_config::Config::new().probe("kpathsea").is_ok() {
     emit_linked();
     return;
   }
