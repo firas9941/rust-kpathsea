@@ -1,6 +1,6 @@
 [package]
 name = "kpathsea_sys"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Deyan Ginev <deyan.ginev@gmail.com>"]
 edition = "2024"
 links = "kpathsea"
@@ -16,6 +16,16 @@ categories = ["external-ffi-bindings"]
 
 [lib]
 name = "kpathsea_sys"
+
+[features]
+# Build a static libkpathsea from source with `cc`, instead of locating a
+# system/DLL library — an in-process, self-contained link (on Windows, no
+# runtime kpathsealibw64.dll). Supported on windows-msvc and Unix (verified on
+# Linux). The kpathsea source is NOT bundled (it is LGPL; this crate stays
+# MIT/Apache): it is fetched at build time (pinned commit) or taken from
+# `KPATHSEA_SRC_DIR`. Only our own config headers live in-tree (`common/`,
+# `msvc/`, `unix/`, all original). Opt-in; off by default. See `common/README.md`.
+build_from_source = []
 
 [build-dependencies]
 pkg-config = "0.3"
