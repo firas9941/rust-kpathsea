@@ -1,5 +1,43 @@
 # Change Log
 
+## [0.3.4] 2026-07-19 — a linked `Kpaths::new()` can no longer fail; `TEXINPUTS` honored with no usable `kpsewhich`
+
+* **On a linked build, `Kpaths::new()` no longer fails when the host's
+  `kpsewhich` cannot be resolved — so `TEXINPUTS` &c. are always honored.**
+  It previously anchored `kpathsea_set_program_name` on that executable and
+  returned `Err` without it, leaving the linked `libkpathsea` uninitialized:
+  every lookup returned `None` and env-var search paths were silently ignored,
+  though the library is present in the binary and needs no TeX distribution to
+  serve them. The failure is invisible to a caller with its own
+  bindings/caches — only *raw* file lookups vanish.
+
+  Resolution fails for more reasons than "no TeX installed": absent from this
+  process's `PATH` (as opposed to the user's interactive shell), a stale
+  `KPSEWHICH` override, present but not executable, or a `kpsewhich.exe` beside
+  a Linux binary under WSL.
+
+  The anchor now degrades instead: `kpsewhich` → `std::env::current_exe` → a
+  literal; with a resolvable `kpsewhich`, behavior is unchanged.
+
+  How much a degraded anchor still resolves is platform-dependent. On Unix it
+  costs only TeX-*distribution* discovery — nothing that was reachable anyway —
+  and env-var search paths keep working. On Windows the anchor also governs
+  where `texmf.cnf` is looked for, so an anchor outside the distribution finds
+  no config and resolves nothing: initialized but inert, still better than the
+  `Err` it replaces.
+
+  The subprocess backend is untouched, and `new()` keeps its `Result` for API
+  stability and the unlinked build. Guarded by `tests/texinputs_fallback.rs`
+  and the `anchor_tiers` unit tests. Motivated by `dginev/latexml-oxide#304`.
+
+* **The one unrecoverable configuration now fails loudly.** With no linked
+  `libkpathsea` AND no `kpsewhich` to spawn, nothing can ever resolve, so
+  `Kpaths::new()` returns an error naming both missing backends and prints it
+  once to stderr — instead of the previous terse "Error finding kpsewhich
+  executable", which callers routinely `.ok()` into silence, leaving an inert
+  resolver indistinguishable from a TeX tree that simply lacks the file.
+  Guarded by `tests/no_backend.rs`.
+
 ## [0.3.3] 2026-07-14 — build_from_source: fix `_stat64i32` LNK2005 under static CRT + LTO
 
 * **`kpathsea_sys` 0.2.3 — the `build_from_source` static link now works under
